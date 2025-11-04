@@ -107,12 +107,44 @@ def build_html(rows_json: str, levels: List[str], desc_col: Optional[str], title
 
     function buildElements(rows, levels, filters, descCol) {{
       const elements = [];
-      const layout = {{ name: 'concentric', fit: true, padding: 60, animate: true, spacingFactor: 1.2 }};
+      const layout = {{
+        name: 'concentric',
+        fit: true,
+        padding: 120,
+        animate: true,
+        spacingFactor: 1.35,
+        minNodeSpacing: 80,
+        concentric: function(n) {{
+          const k = n.data('kind');
+          if (k === 'center') return 3;
+          if (k === 'next') return 2;
+          if (k === 'level0') return 1;
+          if (k === 'desc') return 0;
+          return 1;
+        }},
+        levelWidth: function(nodes) {{ return 240; }}
+      }};
       const BLUE = '#2563eb';
       const BLUE_DARK = '#1e40af';
       const LABEL = '#1f2937'; // dark grey for better visibility
       const stylesheet = [
-        {{ selector: 'node', style: {{ label: 'data(label)', 'text-valign': 'center', 'text-halign': 'center', 'font-size': '16px', color: LABEL, 'background-color': BLUE, width: 30, height: 30, opacity: 0.95 }} }},
+        {{ selector: 'node', style: {{
+            label: 'data(label)',
+            'text-valign': 'top',
+            'text-halign': 'center',
+            'font-size': '16px',
+            color: LABEL,
+            'background-color': BLUE,
+            width: 30,
+            height: 30,
+            opacity: 0.95,
+            'text-wrap': 'wrap',
+            'text-max-width': '160px',
+            'text-margin-y': -12,
+            'text-margin-x': 6,
+            'text-outline-color': '#f8fafc',
+            'text-outline-width': 2
+          }} }},
         {{ selector: 'node.center', style: {{ 'background-color': BLUE, width: 60, height: 60, 'font-weight': '600', color: LABEL, 'border-width': 3, 'border-color': BLUE_DARK }} }},
         {{ selector: 'node.level0', style: {{ 'background-color': BLUE, width: 38, height: 38, color: LABEL }} }},
         {{ selector: 'node.next', style: {{ 'background-color': BLUE, width: 34, height: 34, color: LABEL }} }},
@@ -162,6 +194,40 @@ def build_html(rows_json: str, levels: List[str], desc_col: Optional[str], title
 
     let cy = null;
 
+    function boxesOverlap(a, b) {{
+      return !(a.x2 < b.x1 || b.x2 < a.x1 || a.y2 < b.y1 || b.y2 < a.y1);
+    }}
+
+    function anyOverlap(cy) {{
+      const nodes = cy.nodes();
+      for (let i = 0; i < nodes.length; i++) {{
+        const bbi = nodes[i].boundingBox({{ includeLabels: true }});
+        for (let j = i + 1; j < nodes.length; j++) {{
+          const bbj = nodes[j].boundingBox({{ includeLabels: true }});
+          if (boxesOverlap(bbi, bbj)) return true;
+        }}
+      }}
+      return false;
+    }}
+
+    function runAdaptiveLayout(cy, baseLayout) {{
+      let attempt = 0;
+      let lw = 240;
+      let spacing = 80;
+      while (attempt < 3) {{
+        const newLayout = Object.assign({{}}, baseLayout);
+        newLayout.levelWidth = function() {{ return lw; }};
+        newLayout.minNodeSpacing = spacing;
+        cy.layout(newLayout).run();
+        cy.resize();
+        cy.fit(cy.elements(), 80);
+        if (!anyOverlap(cy)) break;
+        lw += 60;
+        spacing += 20;
+        attempt++;
+      }}
+    }}
+
     function render() {{
       const [elements, layout, stylesheet] = buildElements(DATA, LEVELS, filters, DESC_COL);
       if (!cy) {{
@@ -172,9 +238,8 @@ def build_html(rows_json: str, levels: List[str], desc_col: Optional[str], title
           layout: layout,
           wheelSensitivity: 0.2,
         }});
-        // Ensure initial fit
-        cy.resize();
-        cy.fit();
+        // Adaptive layout: increase spacing if any label overlaps are detected
+        runAdaptiveLayout(cy, layout);
         cy.on('tap', 'node', (evt) => {{
           const node = evt.target;
           const kind = node.data('kind');
@@ -189,9 +254,7 @@ def build_html(rows_json: str, levels: List[str], desc_col: Optional[str], title
       }} else {{
         cy.elements().remove();
         cy.add(elements);
-        cy.layout(layout).run();
-        cy.resize();
-        cy.fit();
+        runAdaptiveLayout(cy, layout);
       }}
 
       // Breadcrumb
@@ -218,7 +281,7 @@ def build_html(rows_json: str, levels: List[str], desc_col: Optional[str], title
       document.getElementById('backBtn').addEventListener('click', back);
       document.getElementById('resetBtn').addEventListener('click', reset);
       // Keep graph fitted on viewport resize
-      window.addEventListener('resize', () => {{ if (cy) {{ cy.resize(); cy.fit(); }} }});
+      window.addEventListener('resize', () => {{ if (cy) {{ cy.resize(); cy.fit(cy.elements(), 80); }} }});
       render();
     }});
     """
