@@ -110,10 +110,11 @@ def build_html(rows_json: str, levels: List[str], desc_col: Optional[str], title
       const layout = {{
         name: 'concentric',
         fit: true,
-        padding: 120,
+        padding: 160,
         animate: true,
-        spacingFactor: 1.35,
-        minNodeSpacing: 80,
+        spacingFactor: 1.5,
+        minNodeSpacing: 120,
+        nodeDimensionsIncludeLabels: true,
         concentric: function(n) {{
           const k = n.data('kind');
           if (k === 'center') return 3;
@@ -122,7 +123,7 @@ def build_html(rows_json: str, levels: List[str], desc_col: Optional[str], title
           if (k === 'desc') return 0;
           return 1;
         }},
-        levelWidth: function(nodes) {{ return 240; }}
+        levelWidth: function(nodes) {{ return 280; }}
       }};
       const BLUE = '#2563eb';
       const BLUE_DARK = '#1e40af';
@@ -148,8 +149,8 @@ def build_html(rows_json: str, levels: List[str], desc_col: Optional[str], title
         {{ selector: 'node.center', style: {{ 'background-color': BLUE, width: 60, height: 60, 'font-weight': '600', color: LABEL, 'border-width': 3, 'border-color': BLUE_DARK }} }},
         {{ selector: 'node.level0', style: {{ 'background-color': BLUE, width: 38, height: 38, color: LABEL }} }},
         {{ selector: 'node.next', style: {{ 'background-color': BLUE, width: 34, height: 34, color: LABEL }} }},
-        {{ selector: 'node.desc', style: {{ 'background-color': BLUE, width: 28, height: 28, color: LABEL }} }},
-        {{ selector: 'edge', style: {{ 'line-color': '#60a5fa', width: 3, opacity: 0.85 }} }},
+        {{ selector: 'node.desc', style: {{ 'background-color': BLUE, width: 28, height: 28, color: LABEL, 'text-valign': 'bottom', 'text-margin-y': 12 }} }},
+        {{ selector: 'edge', style: {{ 'line-color': '#60a5fa', width: 3, opacity: 0.85, 'curve-style': 'bezier', 'control-point-step-size': 80 }} }},
         {{ selector: 'node:selected', style: {{ 'border-width': 4, 'border-color': BLUE_DARK }} }},
       ];
 
@@ -210,22 +211,63 @@ def build_html(rows_json: str, levels: List[str], desc_col: Optional[str], title
       return false;
     }}
 
+    function nodePriority(n) {{
+      const k = n.data('kind');
+      if (k === 'center') return 3;
+      if (k === 'level0' || k === 'next') return 2;
+      return 1; // desc or others
+    }}
+
+    function resolveOverlaps(cy, margin = 12, maxPasses = 8) {{
+      let pass = 0;
+      while (pass < maxPasses) {{
+        let moved = false;
+        const nodes = cy.nodes();
+        cy.batch(() => {{
+          for (let i = 0; i < nodes.length; i++) {{
+            const a = nodes[i];
+            const bbA = a.boundingBox({{ includeLabels: true }});
+            for (let j = i + 1; j < nodes.length; j++) {{
+              const b = nodes[j];
+              const bbB = b.boundingBox({{ includeLabels: true }});
+              if (!boxesOverlap(bbA, bbB)) continue;
+              const target = nodePriority(a) <= nodePriority(b) ? a : b;
+              const bbT = target.boundingBox({{ includeLabels: true }});
+              const p = target.position();
+              const overlapY = Math.max(0, Math.min(bbA.y2, bbB.y2) - Math.max(bbA.y1, bbB.y1));
+              const overlapX = Math.max(0, Math.min(bbA.x2, bbB.x2) - Math.max(bbA.x1, bbB.x1));
+              const dy = Math.max(margin, overlapY + margin);
+              const dx = overlapX > 0 ? overlapX * 0.35 : 0;
+              target.position({{ x: p.x + dx, y: p.y + dy }});
+              moved = true;
+            }}
+          }}
+        }});
+        if (!moved) break;
+        pass++;
+      }}
+      cy.resize();
+      cy.fit(cy.elements(), 100);
+    }}
+
     function runAdaptiveLayout(cy, baseLayout) {{
       let attempt = 0;
-      let lw = 240;
-      let spacing = 80;
+      let lw = 280;
+      let spacing = 120;
       while (attempt < 3) {{
         const newLayout = Object.assign({{}}, baseLayout);
         newLayout.levelWidth = function() {{ return lw; }};
         newLayout.minNodeSpacing = spacing;
         cy.layout(newLayout).run();
         cy.resize();
-        cy.fit(cy.elements(), 80);
+        cy.fit(cy.elements(), 100);
         if (!anyOverlap(cy)) break;
-        lw += 60;
-        spacing += 20;
+        lw += 70;
+        spacing += 30;
         attempt++;
       }}
+      // Final safeguard: if overlaps persist, nudge nodes apart
+      if (anyOverlap(cy)) {{ resolveOverlaps(cy, 16, 12); }}
     }}
 
     function render() {{
@@ -281,7 +323,7 @@ def build_html(rows_json: str, levels: List[str], desc_col: Optional[str], title
       document.getElementById('backBtn').addEventListener('click', back);
       document.getElementById('resetBtn').addEventListener('click', reset);
       // Keep graph fitted on viewport resize
-      window.addEventListener('resize', () => {{ if (cy) {{ cy.resize(); cy.fit(cy.elements(), 80); }} }});
+      window.addEventListener('resize', () => {{ if (cy) {{ cy.resize(); runAdaptiveLayout(cy, {{ name: 'concentric' }}); }} }});
       render();
     }});
     """
