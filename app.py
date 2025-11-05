@@ -57,33 +57,10 @@ def build_html(rows_json: str, levels: List[str], desc_col: Optional[str], title
                source_name: Optional[str] = None, columns_display: Optional[List[str]] = None) -> str:
     cytoscape_script_inline = fetch_cytoscape_js(cy_version) if embed_lib else None
 
-    # Refined styles for a nicer control panel and buttons
+    # Minimal styles: full-screen canvas only
     css = """
     html, body { height: 100%; margin: 0; }
     .app { height: 100vh; width: 100vw; overflow: hidden; background: #f5f7fb; }
-    #controls {
-      position: fixed; top: 16px; left: 16px; z-index: 1000;
-      background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(248,249,251,0.96));
-      backdrop-filter: blur(6px);
-      border: 1px solid #e3e6eb; border-radius: 14px; padding: 16px 16px 14px 16px;
-      box-shadow: 0 12px 28px rgba(16,24,40,0.18);
-      min-width: 360px; font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, sans-serif;
-    }
-    #controls h3 { margin: 0 0 10px 0; font-weight: 700; letter-spacing: 0.2px; }
-    .row { display: flex; gap: 10px; align-items: center; }
-    .btn { border: 1px solid #cbd5e1; background: linear-gradient(180deg, #ffffff, #f8fafc); color: #0f172a; border-radius: 10px; padding: 9px 14px; cursor: pointer; font-weight: 600; box-shadow: 0 1px 2px rgba(16,24,40,0.06); transition: transform .12s ease, box-shadow .12s ease, background .12s ease, border-color .12s ease; }
-    .btn:hover { border-color: #94a3b8; background: linear-gradient(180deg, #f8fafc, #eef2f7); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(16,24,40,0.12); }
-    .btn:active { transform: translateY(0); box-shadow: 0 1px 2px rgba(16,24,40,0.06); }
-    #backBtn { background: linear-gradient(180deg, #ffffff, #f1f5f9); }
-    #resetBtn { background: linear-gradient(180deg, #2563eb, #1d4ed8); color: #ffffff; border-color: #1e40af; }
-    #resetBtn:hover { box-shadow: 0 6px 16px rgba(37,99,235,0.25); }
-    #resetBtn:active { box-shadow: 0 2px 8px rgba(37,99,235,0.20); }
-    .meta { margin-top: 6px; font-size: 13px; color: #334155; }
-    .meta .label { font-weight: 600; color: #0f172a; }
-    #breadcrumb { margin-top: 10px; font-size: 14px; color: #111827; }
-    /* Hide meta/source/columns and breadcrumb path as requested */
-    .meta, #breadcrumb { display: none; }
-    #descPanel { margin-top: 8px; font-size: 13px; color: #111827; max-height: 30vh; overflow-y: auto; }
     #cy { position: fixed; top: 0; left: 0; right: 0; bottom: 0; }
     """
 
@@ -299,29 +276,20 @@ def build_html(rows_json: str, levels: List[str], desc_col: Optional[str], title
         runAdaptiveLayout(cy, layout);
       }}
 
-      // Breadcrumb
-      const trail = filters.map((f, i) => `${{LEVELS[i]}}: ${{f}}`);
-      document.getElementById('breadcrumb').innerHTML = trail.length ? `<strong>Path:</strong> ${{trail.join(' › ')}}` : '';
-
-      // Description list
-      if (DESC_COL && filters.length === LEVELS.length) {{
-        const dfFiltered = filterRows(DATA, filters);
-        const descSet = new Set();
-        dfFiltered.forEach(r => {{ if (r[DESC_COL]) descSet.add(String(r[DESC_COL])); }});
-        const list = Array.from(descSet).slice(0, 200).map(d => `<li>${{d}}</li>`).join('');
-        document.getElementById('descPanel').innerHTML = `<strong>Descriptions:</strong><ul>${{list}}</ul>`;
-      }} else {{
-        document.getElementById('descPanel').innerHTML = '';
-      }}
+      // No control panel; breadcrumb/description panel removed.
     }}
 
     function reset() {{ filters = []; render(); }}
     function back() {{ if (filters.length > 0) {{ filters.pop(); render(); }} }}
 
     window.addEventListener('DOMContentLoaded', () => {{
-      document.getElementById('title').textContent = {json.dumps(title)};
-      document.getElementById('backBtn').addEventListener('click', back);
-      document.getElementById('resetBtn').addEventListener('click', reset);
+      document.title = {json.dumps(title)};
+      // Keyboard shortcuts: B = Back, R = Reset
+      window.addEventListener('keydown', (e) => {{
+        const k = (e.key || '').toLowerCase();
+        if (k === 'b') {{ back(); }}
+        if (k === 'r') {{ reset(); }}
+      }});
       // Keep graph fitted on viewport resize
       window.addEventListener('resize', () => {{ if (cy) {{ cy.resize(); runAdaptiveLayout(cy, {{ name: 'concentric' }}); }} }});
       render();
@@ -347,19 +315,6 @@ def build_html(rows_json: str, levels: List[str], desc_col: Optional[str], title
     </head>
     <body>
       <div class="app">
-        <div id="controls">
-          <h3 id="title">{title}</h3>
-          <div class="row">
-            <button class="btn" id="backBtn">Back</button>
-            <button class="btn" id="resetBtn">Reset</button>
-          </div>
-          <div class="meta">
-            <div><span class="label">Source:</span> {source_name or ''}</div>
-            <div><span class="label">Columns:</span> {', '.join(columns_display or levels)}</div>
-          </div>
-          <div id="breadcrumb"></div>
-          <div id="descPanel"></div>
-        </div>
         <div id="cy"></div>
       </div>
       <script>{js}</script>
