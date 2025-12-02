@@ -387,5 +387,61 @@ def transform_data(sql_query):
     except Exception as e:
         return {'success': False, 'error': str(e)}
 
+@eel.expose
+def export_dashboard(dashboard_state):
+    import tkinter as tk
+    from tkinter import filedialog
+    
+    if current_data is None:
+        return {'success': False, 'error': 'No data loaded'}
+
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        root.wm_attributes('-topmost', 1)
+        
+        path = filedialog.asksaveasfilename(
+            defaultextension=".html",
+            filetypes=[("HTML Files", "*.html")],
+            title="Save Dashboard as HTML"
+        )
+        root.destroy()
+        
+        if not path:
+            return {'success': False, 'error': 'Cancelled'}
+            
+        # 1. Get Full Data
+        df = current_data.execute("SELECT * FROM data").fetchdf()
+        data_json = df.to_json(orient='records', date_format='iso')
+        
+        # 2. Read Files
+        base_dir = 'web_dashboard'
+        with open(os.path.join(base_dir, 'standalone_template.html'), 'r', encoding='utf-8') as f:
+            template = f.read()
+        with open(os.path.join(base_dir, 'style.css'), 'r', encoding='utf-8') as f:
+            css = f.read()
+        with open(os.path.join(base_dir, 'script.js'), 'r', encoding='utf-8') as f:
+            js = f.read()
+        with open(os.path.join(base_dir, 'mini_engine.js'), 'r', encoding='utf-8') as f:
+            mini_engine = f.read()
+            
+        # 3. Replace Placeholders
+        # Replace "placeholders" (including quotes) with actual data objects
+        final_html = template.replace('"{{DATA_JSON}}"', data_json)
+        final_html = final_html.replace('"{{STATE_JSON}}"', json.dumps(dashboard_state))
+        
+        # Replace comment blocks with actual code
+        final_html = final_html.replace('/* {{STYLE_CSS}} */', css)
+        final_html = final_html.replace('/* {{SCRIPT_JS}} */', js)
+        final_html = final_html.replace('/* {{MINI_ENGINE_JS}} */', mini_engine)
+        
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(final_html)
+            
+        return {'success': True, 'path': path}
+        
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
 if __name__ == '__main__':
     eel.start('index.html', size=(1200, 800))

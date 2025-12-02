@@ -101,6 +101,8 @@ async function browseFile() {
             dashboardState.filters = {};
             renderFiltersList();
             
+            clearFilterWidgetsContent();
+            
             // Refresh existing widgets if any (they might break if columns differ, but best effort)
             refreshAllWidgets();
         } else {
@@ -110,6 +112,7 @@ async function browseFile() {
 }
 
 let editingWidgetId = null;
+let editingFilterCol = null;
 
 // Modal Handling
 function toggleChartSettings() {
@@ -364,10 +367,167 @@ function removeWidget(widgetId) {
     }
 }
 
+function restoreWidget(config) {
+    let content = '';
+    let w = 6, h = 4;
+    
+    if (config.type === 'filter') {
+        const col = config.column;
+        
+        // Size defaults
+        w = 3; h = 4;
+        if (config.style === 'dropdown') {
+            w = 3; h = 2;
+        } else if (config.style === 'list' && config.orientation === 'horizontal') {
+            w = 6; h = 2;
+        }
+
+        content = `
+            <div class="card h-100 shadow-sm" style="overflow: visible;">
+                <div class="card-header d-flex justify-content-between align-items-center py-1 px-2 bg-light">
+                    <span class="fw-bold small text-truncate" title="Filter: ${col}"><i class="fas fa-filter me-1 text-muted"></i> ${col}</span>
+                    <div class="widget-controls d-flex align-items-center">
+                        <button class="btn btn-link btn-sm text-muted p-0 me-2" onclick="editFilterWidget('${col}')">
+                            <i class="fas fa-edit"></i>
+                        </button>
+                        <button class="btn btn-link btn-sm text-danger p-0" onclick="removeFilter('${col}')">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="card-body p-2 d-flex flex-column" id="filter-widget-${col}" style="overflow: visible;">
+                    <div class="text-center"><div class="spinner-border spinner-border-sm"></div></div>
+                </div>
+            </div>
+        `;
+    } else {
+        // Chart/Text/Table
+        const widgetId = config.id;
+        content = `
+            <div class="card h-100 shadow-sm">
+                <div class="card-header position-relative py-2">
+                    <div class="widget-title w-100 text-center fw-bold small text-uppercase text-truncate px-5">
+                        ${config.title || ''}
+                    </div>
+                    <div class="widget-controls position-absolute top-0 end-0 h-100 d-flex align-items-center pe-2">
+                        <button class="btn btn-link btn-sm text-muted p-0 me-2" onclick="editWidget('${widgetId}')">
+                            <i class="fas fa-edit"></i>
+                        </button>
+                        <button class="btn btn-link btn-sm text-muted p-0" onclick="removeWidget('${widgetId}')">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="card-body p-2 position-relative overflow-hidden" id="${widgetId}">
+                    <div class="d-flex justify-content-center align-items-center h-100 text-muted">Initializing...</div>
+                </div>
+            </div>
+        `;
+    }
+
+    // Try to find grid position from saved config?
+    // If config has x,y,w,h (it might not if we didn't save it explicitly to dashboardState, 
+    // but GridStack updates DOM. We don't sync back to dashboardState on resize/drag unless we add listener.
+    // Wait, dashboardState.widgets[id] only stores config, not layout!
+    // Layout is managed by GridStack. 
+    // If we export, we need to capture layout.
+    // The export function in JS needs to capture current layout before sending to Python.
+    
+    // For restore (in standalone), the layout info should be in the config passed here.
+    // So I need to update `exportDashboard` to inject layout info into `dashboardState`.
+    
+    const node = {
+        w: config.gs_w || config.w || w,
+        h: config.gs_h || config.h || h,
+        x: config.gs_x || config.x, // fallback for old configs
+        y: config.gs_y || config.y,
+        content: content,
+        id: config.id
+    };
+    
+    // Safety check: if x/y are columns (strings), don't use them for layout!
+    if (isNaN(parseInt(node.x))) delete node.x;
+    if (isNaN(parseInt(node.y))) delete node.y;
+    
+    grid.addWidget(node);
+    
+    // Overflow fix for filters
+    if (config.type === 'filter') {
+        setTimeout(() => {
+            const widgetEl = document.getElementById(`filter-widget-${config.column}`);
+            if (widgetEl) {
+                const contentEl = widgetEl.closest('.grid-stack-item-content');
+                if (contentEl) {
+                    contentEl.style.overflow = 'visible';
+                    const itemEl = contentEl.closest('.grid-stack-item');
+                    if (itemEl) itemEl.style.overflow = 'visible';
+                }
+            }
+        }, 50);
+    }
+}
+
+async function exportDashboard() {
+    if (!dashboardState.fileLoaded) {
+        alert('Please load data first.');
+        return;
+    }
+    
+    // Capture current layout
+    const items = grid.getGridItems();
+    items.forEach(item => {
+        const id = item.getAttribute('gs-id');
+        if (dashboardState.widgets[id]) {
+            // Use gs_ prefix to avoid conflict with chart config x/y (columns)
+            dashboardState.widgets[id].gs_x = item.getAttribute('gs-x');
+            dashboardState.widgets[id].gs_y = item.getAttribute('gs-y');
+            dashboardState.widgets[id].gs_w = item.getAttribute('gs-w');
+            dashboardState.widgets[id].gs_h = item.getAttribute('gs-h');
+        }
+    });
+    
+    // Capture Dashboard Title from input if it exists, or global state
+    const titleInput = document.getElementById('dashboardNameInput');
+    if (titleInput) {
+        dashboardState.dashboardTitle = titleInput.value.trim();
+    }
+    
+    // Capture Alignment
+    const alignInput = document.querySelector('input[name="titleAlign"]:checked');
+    if (alignInput) {
+        dashboardState.dashboardTitleAlign = alignInput.value;
+    }
+    
+    const btn = document.getElementById('exportBtn');
+    const originalText = btn.innerHTML;
+    btn.innerHTML = '<div class="spinner-border spinner-border-sm"></div> Exporting...';
+    btn.disabled = true;
+    
+    try {
+        const res = await eel.export_dashboard(dashboardState)();
+        if (res.success) {
+            alert('Dashboard exported successfully to ' + res.path);
+        } else {
+            alert('Export failed: ' + res.error);
+        }
+    } catch (e) {
+        alert('Export error: ' + e);
+    }
+    
+    btn.innerHTML = originalText;
+    btn.disabled = false;
+}
+
 // Core Render Function
 async function renderWidget(widgetId) {
     const config = dashboardState.widgets[widgetId];
     if (!config) return;
+
+    // Handle Filter Widgets
+    if (config.type === 'filter') {
+        await renderFilterWidgetContent(config.column, config.style, config.orientation);
+        return;
+    }
 
     const container = document.getElementById(widgetId);
     
@@ -576,6 +736,14 @@ function addFilter() {
         return;
     }
     
+    editingFilterCol = null;
+    const modalEl = document.getElementById('filterModal');
+    if (modalEl) {
+        modalEl.querySelector('.modal-title').innerText = 'Add Filter';
+        const btn = modalEl.querySelector('.btn-primary');
+        if (btn) btn.innerText = 'Apply Filter';
+    }
+
     const select = document.getElementById('filterColumn');
     select.innerHTML = '<option value="">Select Column...</option>';
     
@@ -589,8 +757,20 @@ function addFilter() {
     
     document.getElementById('filterValues').innerHTML = '<div class="text-muted small text-center p-2">Select a column first</div>';
     
+    // Reset UI state
+    document.getElementById('displayDropdown').checked = true;
+    toggleListOrientationOption();
+    
     const modal = new bootstrap.Modal(document.getElementById('filterModal'));
     modal.show();
+}
+
+function toggleListOrientationOption() {
+    const isList = document.getElementById('displayList').checked;
+    const optionDiv = document.getElementById('listOrientationOption');
+    if (optionDiv) {
+        optionDiv.style.display = isList ? 'block' : 'none';
+    }
 }
 
 function updateDropdownButtonText() {
@@ -693,30 +873,92 @@ function saveFilter() {
     
     // Get display style
     const displayStyle = document.querySelector('input[name="filterDisplayStyle"]:checked').value;
+    
+    // Get orientation if list style
+    let orientation = 'vertical';
+    if (displayStyle === 'list') {
+        const orientEl = document.querySelector('input[name="filterListOrientation"]:checked');
+        if (orientEl) orientation = orientEl.value;
+    }
 
     // Check if filter widget already exists for this column
-    if (document.getElementById(`filter-widget-${col}`)) {
-        alert(`A filter for column "${col}" already exists.`);
-        return;
+    const existingWidget = document.getElementById(`filter-widget-${col}`);
+    if (existingWidget) {
+        if (!editingFilterCol || (editingFilterCol && editingFilterCol !== col)) {
+             alert(`A filter for column "${col}" already exists.`);
+             return;
+        }
+    }
+
+    // If editing and column changed, remove old
+    if (editingFilterCol && editingFilterCol !== col) {
+        removeFilter(editingFilterCol);
+    }
+    
+    // If editing and column same, remove old to replace
+    if (editingFilterCol && editingFilterCol === col) {
+        removeFilter(col);
     }
 
     if (values.length > 0) {
         dashboardState.filters[col] = values;
-        addFilterWidget(col, displayStyle);
+        addFilterWidget(col, displayStyle, orientation);
     } else {
         // If nothing selected, do nothing (or remove?)
-        // User flow: they just made a filter, if they selected nothing, maybe just don't add it.
         delete dashboardState.filters[col];
     }
-    
-    // Sidebar list is removed, so no renderFiltersList()
-    // renderFiltersList(); 
     
     refreshAllWidgets();
     
     const modalEl = document.getElementById('filterModal');
     const modal = bootstrap.Modal.getInstance(modalEl);
     modal.hide();
+}
+
+async function editFilterWidget(col) {
+    editingFilterCol = col;
+    const widgetId = `widget_filter_${col}`;
+    const config = dashboardState.widgets[widgetId];
+    
+    if (!config) return;
+
+    const select = document.getElementById('filterColumn');
+    select.innerHTML = '';
+    
+    // Populate columns
+    dashboardState.columns.forEach(c => {
+        const option = document.createElement('option');
+        option.value = c;
+        option.text = c;
+        select.appendChild(option);
+    });
+    
+    select.value = col;
+    
+    // Trigger value loading
+    await updateFilterValues();
+    
+    // Set Style
+    const styleRadios = document.getElementsByName('filterDisplayStyle');
+    styleRadios.forEach(r => {
+        r.checked = (r.value === config.style);
+    });
+    
+    // Set Orientation
+    const orientationRadios = document.getElementsByName('filterListOrientation');
+    orientationRadios.forEach(r => {
+        r.checked = (r.value === config.orientation);
+    });
+    
+    toggleListOrientationOption();
+    
+    // Update Modal UI
+    const modalEl = document.getElementById('filterModal');
+    modalEl.querySelector('.modal-title').innerText = 'Edit Filter';
+    modalEl.querySelector('.btn-primary').innerText = 'Update Filter';
+    
+    const modal = new bootstrap.Modal(modalEl);
+    modal.show();
 }
 
 function removeFilter(col) {
@@ -735,18 +977,27 @@ function removeFilter(col) {
 }
 
 // Function to add filter widget to grid
-async function addFilterWidget(col, style) {
-    // Calculate initial size based on style
-    const w = style === 'dropdown' ? 3 : 3;
-    const h = style === 'dropdown' ? 2 : 4;
+async function addFilterWidget(col, style, orientation = 'vertical') {
+    // Calculate initial size based on style and orientation
+    let w = 3, h = 4;
+    if (style === 'dropdown') {
+        w = 3; h = 2;
+    } else if (style === 'list' && orientation === 'horizontal') {
+        w = 6; h = 2; // Wider for horizontal list
+    }
 
     const content = `
         <div class="card h-100 shadow-sm" style="overflow: visible;">
             <div class="card-header d-flex justify-content-between align-items-center py-1 px-2 bg-light">
                 <span class="fw-bold small text-truncate" title="Filter: ${col}"><i class="fas fa-filter me-1 text-muted"></i> ${col}</span>
-                <button class="btn btn-link btn-sm text-danger p-0 btn-close-widget" onclick="removeFilter('${col}')">
-                    <i class="fas fa-times"></i>
-                </button>
+                <div class="widget-controls d-flex align-items-center">
+                    <button class="btn btn-link btn-sm text-muted p-0 me-2" onclick="editFilterWidget('${col}')">
+                        <i class="fas fa-edit"></i>
+                    </button>
+                    <button class="btn btn-link btn-sm text-danger p-0" onclick="removeFilter('${col}')">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
             </div>
             <div class="card-body p-2 d-flex flex-column" id="filter-widget-${col}" style="overflow: visible;">
                 <div class="text-center"><div class="spinner-border spinner-border-sm"></div></div>
@@ -763,22 +1014,77 @@ async function addFilterWidget(col, style) {
     
     grid.addWidget(node);
     
+    // Allow overflow for filter widgets to support dropdowns
+    // Use a small timeout to ensure DOM is updated
+    setTimeout(() => {
+        const widgetEl = document.getElementById(`filter-widget-${col}`);
+        if (widgetEl) {
+            const contentEl = widgetEl.closest('.grid-stack-item-content');
+            if (contentEl) {
+                contentEl.style.overflow = 'visible';
+                // Also ensure the item itself doesn't clip if it has overflow hidden
+                const itemEl = contentEl.closest('.grid-stack-item');
+                if (itemEl) {
+                    itemEl.style.overflow = 'visible';
+                    // Ensure high z-index so it floats above other widgets
+                    // But we can't permanently set high z-index or it might obscure others
+                    // Bootstrap dropdowns with boundary='window' should handle this, 
+                    // but overflow: visible on containers is crucial.
+                }
+            }
+        }
+    }, 50);
+    
     // Update State
     dashboardState.widgets[node.id] = {
         id: node.id,
         type: 'filter',
         column: col,
         title: col,
-        style: style
+        style: style,
+        orientation: orientation
     };
     
     // Render inner content
-    await renderFilterWidgetContent(col, style);
+    await renderFilterWidgetContent(col, style, orientation);
 }
 
-async function renderFilterWidgetContent(col, style) {
+async function renderFilterWidgetContent(col, style, orientation = 'vertical') {
     const container = document.getElementById(`filter-widget-${col}`);
     if (!container) return;
+
+    // Optimization: Check if already rendered to avoid scroll reset
+    const listContainerId = style === 'dropdown' ? `dd_list_${col}` : `list_scroll_${col}`;
+    const listContainer = document.getElementById(listContainerId);
+    
+    if (listContainer && listContainer.children.length > 0) {
+        // Already rendered, just update checkboxes
+        const currentFilters = dashboardState.filters[col] || [];
+        
+        const checkboxes = listContainer.querySelectorAll(`.filter-widget-chk-${col}`);
+        checkboxes.forEach(cb => {
+            cb.checked = currentFilters.includes(cb.value);
+        });
+        
+        // Update Select All
+        const selectAllId = style === 'dropdown' ? `dd_all_${col}` : `list_all_${col}`;
+        const selectAll = document.getElementById(selectAllId);
+        if (selectAll) {
+             const checkedCount = listContainer.querySelectorAll(`.filter-widget-chk-${col}:checked`).length;
+             selectAll.checked = (checkedCount === checkboxes.length);
+        }
+        
+        // Update Dropdown Button Text
+        if (style === 'dropdown') {
+             const btn = container.querySelector('.dropdown-toggle');
+             if (btn) {
+                 const total = checkboxes.length;
+                 const selected = currentFilters.length;
+                 btn.innerText = (selected === total) ? 'All Selected' : `${selected} selected`;
+             }
+        }
+        return;
+    }
 
     // Get values again (or use cached if we had a robust cache, but fetching is safer for now)
     const res = await eel.get_unique_values(col)();
@@ -806,6 +1112,7 @@ async function renderFilterWidgetContent(col, style) {
                     id="${dropdownId}" 
                     data-bs-toggle="dropdown" 
                     data-bs-auto-close="outside"
+                    data-bs-boundary="window"
                     aria-expanded="false">
                 ${allChecked ? 'All Selected' : `${currentFilters.length} selected`}
             </button>
@@ -847,6 +1154,11 @@ async function renderFilterWidgetContent(col, style) {
         container.style.overflow = 'hidden'; // Prevent body scroll, use internal scroll
         container.className = 'card-body p-0 d-flex flex-column';
         
+        // Set layout style based on orientation
+        const layoutStyle = orientation === 'horizontal' 
+            ? 'display: flex; flex-direction: row; flex-wrap: wrap; gap: 8px; align-content: flex-start; align-items: center;' 
+            : 'display: flex; flex-direction: column; gap: 2px;';
+
         container.innerHTML = `
             <div class="p-2 border-bottom bg-white">
                 <div class="form-check mb-0">
@@ -854,7 +1166,7 @@ async function renderFilterWidgetContent(col, style) {
                     <label class="form-check-label fw-bold small" for="list_all_${col}">Select All</label>
                 </div>
             </div>
-            <div class="p-2 flex-grow-1 custom-scrollbar" style="overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 2px;" id="list_scroll_${col}">
+            <div class="p-2 flex-grow-1 custom-scrollbar" style="overflow-y: auto; ${layoutStyle}" id="list_scroll_${col}">
             </div>
             <div class="p-2 border-top bg-light text-end">
                  <button class="btn btn-sm btn-primary py-0" onclick="applyFilterWidget('${col}', true)">Apply</button>
@@ -865,7 +1177,11 @@ async function renderFilterWidgetContent(col, style) {
 
         res.values.forEach(val => {
             const div = document.createElement('div');
-            div.className = 'form-check mb-0';
+            // For horizontal layout, give items some width constraints or let them flow
+            div.className = orientation === 'horizontal' 
+                ? 'form-check mb-0 me-0 border rounded px-2 py-1 bg-light' // Box style for horizontal
+                : 'form-check mb-0';
+                
             const safeVal = String(val).replace(/[^a-zA-Z0-9]/g, '_');
             const id = `fw_chk_list_${col}_${safeVal}`;
             const isChecked = currentFilters.includes(val);
@@ -1033,6 +1349,15 @@ function refreshAllWidgets() {
     });
 }
 
+function clearFilterWidgetsContent() {
+    Object.values(dashboardState.widgets).forEach(w => {
+        if (w.type === 'filter') {
+             const container = document.getElementById(`filter-widget-${w.column}`);
+             if (container) container.innerHTML = ''; // Force re-render next time renderWidget is called
+        }
+    });
+}
+
 // Dashboard Name Handler
 document.addEventListener('DOMContentLoaded', function() {
     const nameInput = document.getElementById('dashboardNameInput');
@@ -1126,6 +1451,8 @@ async function runSqlTransform() {
         const modal = bootstrap.Modal.getInstance(modalEl);
         modal.hide();
         
+        clearFilterWidgetsContent();
+
         // Refresh all widgets
         Object.keys(dashboardState.widgets).forEach(id => {
             renderWidget(id);
