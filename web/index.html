@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Network Graph Analyzer</title>
+    <script src="https://unpkg.com/vis-network@9.1.6/dist/vis-network.min.js"></script>
+    <link href="https://unpkg.com/vis-network@9.1.6/styles/vis-network.min.css" rel="stylesheet">
+    <script type="text/javascript" src="/eel.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { height: 100%; overflow: hidden; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f5f5f5; }
+        
+        .container { display: flex; height: 100vh; }
+        
+        .sidebar { width: 400px; background: white; border-right: 1px solid #ddd; display: flex; flex-direction: column; }
+        .sidebar-header { padding: 20px; background: #2c3e50; color: white; }
+        .sidebar-header h1 { font-size: 24px; margin-bottom: 5px; }
+        .sidebar-header p { font-size: 12px; opacity: 0.8; }
+        
+        .sidebar-content { flex: 1; overflow-y: auto; padding: 20px; }
+        
+        .section { margin-bottom: 25px; }
+        .section-title { font-size: 14px; font-weight: 600; color: #2c3e50; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+        
+        .file-input-group { margin-bottom: 15px; }
+        .file-input-group label { display: block; font-size: 13px; color: #555; margin-bottom: 5px; }
+        .file-input-group input[type="text"] { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; }
+        .file-input-group select { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; }
+        
+        button { padding: 10px 20px; background: #3498db; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: 600; transition: background 0.3s; }
+        button:hover { background: #2980b9; }
+        button:disabled { background: #95a5a6; cursor: not-allowed; }
+        
+        .query-input { width: 100%; min-height: 100px; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-family: 'Courier New', monospace; font-size: 12px; resize: vertical; }
+        
+        .status { padding: 10px; border-radius: 4px; font-size: 12px; margin-top: 10px; }
+        .status.success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .status.error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        
+        .columns-list { background: #f8f9fa; padding: 10px; border-radius: 4px; font-size: 12px; color: #555; max-height: 100px; overflow-y: auto; }
+        
+        .main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        
+        .graph-container { flex: 1; background: white; position: relative; overflow: hidden; min-height: 0; }
+        #network { position: absolute; top: 0; left: 0; right: 0; bottom: 0; }
+        
+        .graph-info { padding: 15px; background: white; border-top: 1px solid #ddd; font-size: 13px; color: #555; }
+        
+        .loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; }
+        .loading-spinner { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto 10px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <h1>Network Graph</h1>
+                <p>Load data and visualize hierarchical networks</p>
+            </div>
+            
+            <div class="sidebar-content">
+                <div class="section">
+                    <div class="section-title">1. Load Data File</div>
+                    <button onclick="browseFile()" style="width:100%; margin-bottom:10px;">📁 Browse Files</button>
+                    <div style="text-align:center; margin:10px 0; color:#999; font-size:12px;">- OR -</div>
+                    <div class="file-input-group">
+                        <label>File Path:</label>
+                        <input type="text" id="filePath" placeholder="Enter file path manually">
+                    </div>
+                    <div class="file-input-group">
+                        <label>File Type:</label>
+                        <select id="fileType">
+                            <option value="csv">CSV</option>
+                            <option value="parquet">Parquet</option>
+                            <option value="excel">Excel</option>
+                        </select>
+                    </div>
+                    <button onclick="loadFile()">Load File</button>
+                    <div id="loadStatus"></div>
+                    <div id="columnsList" style="display:none; margin-top:10px;">
+                        <strong>File Info:</strong>
+                        <div id="fileInfo" class="columns-list" style="max-height:150px;"></div>
+                        <div style="height:8px"></div>
+                        <strong>Query Sample (first 5 rows):</strong>
+                        <div id="querySample" class="columns-list" style="max-height:150px;"></div>
+                    </div>
+                </div>
+                
+                <div class="section">
+                    <div class="section-title">2. SQL Query</div>
+                    <textarea class="query-input" id="sqlQuery" placeholder="SELECT column1, column2, column3 FROM data WHERE ..."></textarea>
+                    <button onclick="executeQuery()" style="margin-top:10px;">Execute & Build Network</button>
+                    <div id="queryStatus"></div>
+                </div>
+                
+                <div class="section">
+                    <div class="section-title">Appearance</div>
+                    <div class="file-input-group">
+                        <label>Graph Background Color:</label>
+                        <input type="color" id="graphBgColor" value="#ffffff" onchange="setGraphBackgroundColor(this.value)">
+                    </div>
+                    <div class="file-input-group">
+                        <label><input type="checkbox" id="uniformColorToggle" onchange="toggleUniformNodeColor(this.checked)"> Use one color for all nodes</label>
+                        <input type="color" id="uniformNodeColor" value="#3498db" onchange="setUniformNodeColor(this.value)" disabled style="margin-top:8px;">
+                    </div>
+                    <div class="file-input-group">
+                        <label>Edge Color:</label>
+                        <input type="color" id="edgeColorInput" value="#848484" onchange="setEdgeColor(this.value)">
+                    </div>
+                    <div class="file-input-group">
+                        <label>Chart Title:</label>
+                        <input type="text" id="titleInput" placeholder="Enter title..." oninput="setTitleText(this.value)" style="width:100%; padding:6px; border:1px solid #ddd; border-radius:4px;">
+                    </div>
+                    <div class="file-input-group">
+                        <label>Title Alignment:</label>
+                        <select id="titleAlignInput" onchange="setTitleAlign(this.value)" style="width:100%; padding:6px; border:1px solid #ddd; border-radius:4px;">
+                            <option value="left">Left</option>
+                            <option value="center" selected>Center</option>
+                            <option value="right">Right</option>
+                        </select>
+                    </div>
+                    <div class="file-input-group">
+                        <label><input type="checkbox" id="focusModeToggle" onchange="toggleFocusMode(this.checked)"> Focus on clicked node's relationship</label>
+                    </div>
+                </div>
+
+                <div class="section">
+                    <div class="section-title">Instructions</div>
+                    <p style="font-size:12px; color:#666; line-height:1.6;">
+                        • Load a CSV, Excel, or Parquet file<br>
+                        • Write a SQL query (table name is "data")<br>
+                        • First column = main nodes (roots)<br>
+                        • Additional columns = child relationships<br>
+                        • Click nodes to expand their children<br>
+                        • Double-click nodes to focus
+                    </p>
+                </div>
+
+                <div class="section">
+                    <div class="section-title">Export</div>
+                    <button onclick="exportDashboard()">Save Interactive HTML</button>
+                    <div id="exportStatus"></div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="main-content">
+            <div class="graph-container">
+                <div id="chartTitle" style="position:absolute; top:10px; left:0; right:0; text-align:center; font-size:24px; font-weight:bold; color:#333; pointer-events:none; padding:0 20px; z-index:10;"></div>
+                <div id="network"></div>
+                <div id="loading" class="loading" style="display:none;">
+                    <div class="loading-spinner"></div>
+                    <div>Building network...</div>
+                </div>
+            </div>
+            <div class="graph-info" id="graphInfo">
+                Load data and execute a query to visualize the network graph
+            </div>
+        </div>
+    </div>
+    
+    <script type="text/javascript">
+        let network = null;
+        let allNodes = [];
+        let allEdges = [];
+        let visibleNodes = new Set();
+        let expandedNodes = new Set();
+        let nodesDS = null;
+        let edgesDS = null;
+        let edgeIndex = {};
+        let nodeRowsIndex = {};
+        let focusRows = null;
+        let browsePath = [];
+        let browseRows = null;
+        let networkColumns = [];
+        
+        async function browseFile() {
+            const result = await eel.browse_file()();
+            
+            if (result.success) {
+                document.getElementById('filePath').value = result.file_path;
+                document.getElementById('fileType').value = result.file_type;
+                
+                // Auto-load the file
+                await loadFile();
+            } else if (!result.cancelled) {
+                const statusDiv = document.getElementById('loadStatus');
+                statusDiv.innerHTML = `<div class="status error">Error: ${result.error}</div>`;
+            }
+        }
+        
+        async function loadFile() {
+            const filePath = document.getElementById('filePath').value;
+            const fileType = document.getElementById('fileType').value;
+            const statusDiv = document.getElementById('loadStatus');
+            
+            if (!filePath) {
+                statusDiv.innerHTML = '<div class="status error">Please enter a file path or browse for a file</div>';
+                return;
+            }
+            
+            statusDiv.innerHTML = '<div class="status">Loading file... (this may take a moment for large files)</div>';
+            
+            const result = await eel.load_file(filePath, fileType)();
+            
+            if (result.success) {
+                statusDiv.innerHTML = `<div class="status success">${result.message}</div>`;
+                document.getElementById('columnsList').style.display = 'block';
+                document.getElementById('sqlQuery').value = 'select * from data;';
+                
+                let info = `<strong>Rows:</strong> ${result.row_count.toLocaleString()}<br>`;
+                info += `<strong>Columns:</strong> ${result.columns.join(', ')}<br><br>`;
+                info += `<strong>Sample (first 5 rows):</strong><br>`;
+                info += '<div style="font-size:11px; overflow-x:auto;">';
+                
+                if (result.sample && result.sample.length > 0) {
+                    // Create mini table
+                    info += '<table style="border-collapse:collapse; width:100%; margin-top:5px;">';
+                    info += '<tr style="background:#e8e8e8;">';
+                    result.columns.forEach(col => {
+                        info += `<th style="border:1px solid #ccc; padding:3px; font-size:10px;">${col}</th>`;
+                    });
+                    info += '</tr>';
+                    
+                    result.sample.forEach(row => {
+                        info += '<tr>';
+                        result.columns.forEach(col => {
+                            let val = row[col];
+                            if (val === null || val === undefined) val = 'NULL';
+                            else if (typeof val === 'string' && val.length > 20) val = val.substring(0, 20) + '...';
+                            info += `<td style="border:1px solid #ccc; padding:3px; font-size:10px;">${val}</td>`;
+                        });
+                        info += '</tr>';
+                    });
+                    info += '</table>';
+                }
+                
+                info += '</div>';
+                document.getElementById('fileInfo').innerHTML = info;
+            } else {
+                let errorMsg = `<div class="status error">Error: ${result.error}`;
+                if (result.traceback) {
+                    errorMsg += `<br><details style="margin-top:5px;"><summary>View Traceback</summary><pre style="font-size:10px; margin-top:5px; white-space:pre-wrap;">${result.traceback}</pre></details>`;
+                }
+                errorMsg += '</div>';
+                statusDiv.innerHTML = errorMsg;
+            }
+        }
+        
+        async function executeQuery() {
+            const query = document.getElementById('sqlQuery').value;
+            const statusDiv = document.getElementById('queryStatus');
+            
+            if (!query) {
+                statusDiv.innerHTML = '<div class="status error">Please enter a SQL query</div>';
+                return;
+            }
+            
+            statusDiv.innerHTML = '<div class="status">Executing query...</div>';
+            document.getElementById('loading').style.display = 'block';
+            
+            const queryResult = await eel.execute_query(query)();
+            
+            if (!queryResult.success) {
+                let errorMsg = `<div class="status error">Query Error: ${queryResult.error}`;
+                if (queryResult.traceback) {
+                    errorMsg += `<br><details style="margin-top:5px;"><summary>View Traceback</summary><pre style="font-size:10px; margin-top:5px; white-space:pre-wrap;">${queryResult.traceback}</pre></details>`;
+                }
+                errorMsg += '</div>';
+                statusDiv.innerHTML = errorMsg;
+                document.getElementById('loading').style.display = 'none';
+                return;
+            }
+            
+            let statusMsg = `<div class="status success">Query returned ${queryResult.total_rows.toLocaleString()} rows`;
+            if (queryResult.warning) {
+                statusMsg += `<br><strong>⚠️ ${queryResult.warning}</strong>`;
+            }
+            statusMsg += '</div>';
+            statusDiv.innerHTML = statusMsg;
+            
+            const networkData = await eel.get_network_data(queryResult.data)();
+
+            const sampleRows = queryResult.data.slice(0, 5);
+            let qinfo = '';
+            qinfo += '<div style="font-size:11px; overflow-x:auto;">';
+            if (sampleRows.length > 0) {
+                qinfo += '<table style="border-collapse:collapse; width:100%; margin-top:5px;">';
+                qinfo += '<tr style="background:#e8e8e8;">';
+                queryResult.columns.forEach(col => { qinfo += `<th style="border:1px solid #ccc; padding:3px; font-size:10px;">${col}</th>`; });
+                qinfo += '</tr>';
+                sampleRows.forEach(row => {
+                    qinfo += '<tr>';
+                    queryResult.columns.forEach(col => {
+                        let val = row[col];
+                        if (val === null || val === undefined) val = 'NULL';
+                        else if (typeof val === 'string' && val.length > 20) val = val.substring(0, 20) + '...';
+                        qinfo += `<td style="border:1px solid #ccc; padding:3px; font-size:10px;">${val}</td>`;
+                    });
+                    qinfo += '</tr>';
+                });
+                qinfo += '</table>';
+            }
+            qinfo += '</div>';
+            document.getElementById('columnsList').style.display = 'block';
+            const qs = document.getElementById('querySample');
+            if (qs) qs.innerHTML = qinfo;
+            
+            if (networkData.success) {
+                buildNetwork(networkData);
+                statusDiv.innerHTML = statusMsg + `<div class="status success" style="margin-top:5px;">Network built with ${networkData.nodes.length} nodes</div>`;
+            } else {
+                statusDiv.innerHTML = statusMsg + `<div class="status error" style="margin-top:5px;">Network Error: ${networkData.error}</div>`;
+            }
+            
+            document.getElementById('loading').style.display = 'none';
+        }
+        
+        function buildNetwork(data) {
+            allNodes = data.nodes;
+            allEdges = data.edges;
+            networkColumns = data.columns || [];
+            visibleNodes.clear();
+            expandedNodes.clear();
+            const firstLevelNodes = allNodes.filter(n => n.level === 0);
+            if (firstLevelNodes.length > 0) {
+                firstLevelNodes.forEach(n => visibleNodes.add(n.id));
+            } else {
+                allNodes.forEach(n => visibleNodes.add(n.id));
+            }
+            edgeIndex = {};
+            nodeRowsIndex = {};
+            allEdges.forEach(e => { edgeIndex[`${e.from}-${e.to}`] = new Set(e.rows || []); });
+            allNodes.forEach(n => { nodeRowsIndex[n.id] = new Set(n.rows || []); });
+            renderNetwork();
+            document.getElementById('graphInfo').innerHTML = 
+                `Network: ${allNodes.length} total nodes, ${data.columns.length} levels | Click nodes to expand, double-click to focus`;
+        }
+
+        async function exportDashboard() {
+            if (!allNodes || allNodes.length === 0 || !allEdges || allEdges.length === 0) {
+                const s = document.getElementById('exportStatus');
+                s.innerHTML = '<div class="status error">Build a network before exporting</div>';
+                return;
+            }
+            const exportData = {
+                nodes: allNodes,
+                edges: allEdges,
+                columns: networkColumns,
+                appearance: {
+                    graphBgColor: document.querySelector('.graph-container')?.style.background || '#ffffff',
+                    uniformColorEnabled,
+                    uniformColor,
+                    edgeColor,
+                    titleText: document.getElementById('titleInput').value || '',
+                    titleAlign: document.getElementById('titleAlignInput').value || 'center'
+                }
+            };
+            const res = await eel.export_dashboard(exportData)();
+            const s = document.getElementById('exportStatus');
+            if (res && res.success) {
+                s.innerHTML = `<div class="status success">Saved: ${res.path}</div>`;
+            } else {
+                s.innerHTML = `<div class="status error">Error: ${res && res.error ? res.error : 'Export failed'}</div>`;
+            }
+        }
+        
+        function renderNetwork() {
+            if (!nodesDS) nodesDS = new vis.DataSet([]);
+            if (!edgesDS) edgesDS = new vis.DataSet([]);
+            if (!network) {
+                const container = document.getElementById('network');
+                const options = {
+                    layout: { improvedLayout: false },
+                    physics: { enabled: true, solver: 'forceAtlas2Based', stabilization: false, minVelocity: 0.5 },
+                    interaction: { hover: true, dragNodes: true, dragView: true, zoomView: true, navigationButtons: true, keyboard: true }
+                };
+                network = new vis.Network(container, { nodes: nodesDS, edges: edgesDS }, options);
+                network.on('click', function(params) {
+                    if (params.nodes.length > 0) {
+                        const nodeId = params.nodes[0];
+                        toggleNodeChildren(nodeId);
+                    }
+                });
+                network.on('dragEnd', function(params) {
+                    if (params.nodes && params.nodes.length > 0) {
+                        const positions = network.getPositions(params.nodes);
+                        const updates = params.nodes.map(id => ({ id: id, x: positions[id].x, y: positions[id].y, physics: false }));
+                        nodesDS.update(updates);
+                    }
+                });
+            }
+            updateNetworkVisibility();
+        }
+
+        function updateNetworkVisibility() {
+            const desiredNodeIds = Array.from(visibleNodes);
+            const currentNodeIds = new Set(nodesDS.getIds());
+            const toAdd = desiredNodeIds.filter(id => !currentNodeIds.has(id));
+            const toRemove = Array.from(currentNodeIds).filter(id => !visibleNodes.has(id));
+            if (toAdd.length > 0) {
+                const nodesToAdd = allNodes.filter(n => toAdd.includes(n.id)).map(n => {
+                    const base = { id: n.id, label: n.label, level: n.level, color: uniformColorEnabled ? uniformColor : getColorForLevel(n.level), font: { size: 14, color: '#333' } };
+                    const incoming = allEdges.find(e => e.to === n.id && visibleNodes.has(e.from));
+                    if (incoming) {
+                        const pos = network.getPositions([incoming.from])[incoming.from];
+                        if (pos) {
+                            base.x = pos.x + (Math.random() - 0.5) * 100;
+                            base.y = pos.y + (Math.random() - 0.5) * 100;
+                        }
+                    }
+                    return base;
+                });
+                nodesDS.add(nodesToAdd);
+            }
+            if (toRemove.length > 0) nodesDS.remove(toRemove);
+            const desiredEdges = allEdges.filter(e => visibleNodes.has(e.from) && visibleNodes.has(e.to)).map(e => ({
+                id: `${e.from}-${e.to}`,
+                from: e.from,
+                to: e.to,
+                arrows: 'to',
+                color: { color: edgeColor, highlight: edgeColor, hover: edgeColor, inherit: false, opacity: 0.5 }
+            }));
+            const desiredEdgeIds = new Set(desiredEdges.map(e => e.id));
+            const currentEdgeIds = new Set(edgesDS.getIds());
+            const edgesToAdd = desiredEdges.filter(e => !currentEdgeIds.has(e.id));
+            const edgesToRemove = Array.from(currentEdgeIds).filter(id => !desiredEdgeIds.has(id));
+            if (edgesToAdd.length > 0) edgesDS.add(edgesToAdd);
+            if (edgesToRemove.length > 0) edgesDS.remove(edgesToRemove);
+            network.redraw();
+        }
+        
+        function toggleNodeChildren(nodeId) {
+            const node = allNodes.find(n => n.id === nodeId);
+            if (!node) return;
+            if (focusModeEnabled) {
+                if (typeof focusPath === 'undefined') { focusPath = []; }
+                const clickedNode = allNodes.find(n => n.id === nodeId);
+                const current = focusPath.length ? focusPath[focusPath.length - 1] : null;
+                const isEdgeFromCurrent = current !== null && edgeIndex[`${current}-${nodeId}`] !== undefined;
+                if (current !== null && nodeId === current) {
+                    focusChildrenVisible = !focusChildrenVisible;
+                } else if (focusPath.includes(nodeId)) {
+                    const idx = focusPath.indexOf(nodeId);
+                    focusPath = focusPath.slice(0, idx + 1);
+                    focusChildrenVisible = false;
+                } else if (clickedNode && clickedNode.level === 0) {
+                    focusPath = [nodeId];
+                    focusChildrenVisible = true;
+                } else if (isEdgeFromCurrent) {
+                    focusPath.push(nodeId);
+                    focusChildrenVisible = true;
+                } else {
+                    return;
+                }
+                visibleNodes.clear();
+                focusPath.forEach(id => visibleNodes.add(id));
+                if (focusChildrenVisible) {
+                    const currentId = focusPath[focusPath.length - 1];
+                    if (focusPath.length >= 2) {
+                        let base = edgeIndex[`${focusPath[0]}-${focusPath[1]}`] || new Set();
+                        focusRows = new Set(base);
+                        for (let i = 1; i < focusPath.length - 1; i++) {
+                            const erows = edgeIndex[`${focusPath[i]}-${focusPath[i+1]}`] || new Set();
+                            const next = new Set();
+                            for (const r of focusRows) { if (erows.has(r)) next.add(r); }
+                            focusRows = next;
+                        }
+                    } else {
+                        focusRows = new Set(nodeRowsIndex[focusPath[0]] || []);
+                    }
+                    const outEdges = allEdges.filter(e => e.from === currentId);
+                    const childrenFiltered = new Set();
+                    outEdges.forEach(e => {
+                        const rowsSet = edgeIndex[`${e.from}-${e.to}`] || new Set();
+                        for (const r of focusRows || []) { if (rowsSet.has(r)) { childrenFiltered.add(e.to); break; } }
+                    });
+                    childrenFiltered.forEach(childId => visibleNodes.add(childId));
+                } else if (focusPath.length === 1) {
+                    const roots = allNodes.filter(n => n.level === 0);
+                    roots.forEach(n => visibleNodes.add(n.id));
+                }
+                updateNetworkVisibility();
+                return;
+            }
+            if (node.children.length === 0) return;
+            const prev = browsePath.length ? browsePath[browsePath.length - 1] : null;
+            const isEdgeFromPrev = prev !== null && edgeIndex[`${prev}-${nodeId}`] !== undefined;
+            if (expandedNodes.has(nodeId)) {
+                expandedNodes.delete(nodeId);
+                const toHide = getAllDescendants(nodeId);
+                toHide.forEach(id => {
+                    visibleNodes.delete(id);
+                    expandedNodes.delete(id);
+                });
+                if (browsePath.includes(nodeId)) {
+                    const idx = browsePath.indexOf(nodeId);
+                    browsePath = browsePath.slice(0, idx + 1);
+                    if (browsePath.length >= 2) {
+                        let base = edgeIndex[`${browsePath[0]}-${browsePath[1]}`] || new Set();
+                        browseRows = new Set(base);
+                        for (let i = 1; i < browsePath.length - 1; i++) {
+                            const erows = edgeIndex[`${browsePath[i]}-${browsePath[i+1]}`] || new Set();
+                            const next = new Set();
+                            for (const r of browseRows) { if (erows.has(r)) next.add(r); }
+                            browseRows = next;
+                        }
+                    } else if (browsePath.length === 1) {
+                        browseRows = new Set(nodeRowsIndex[browsePath[0]] || []);
+                    } else {
+                        browseRows = null;
+                    }
+                }
+            } else {
+                expandedNodes.add(nodeId);
+                const clickedNode = allNodes.find(n => n.id === nodeId);
+                if (browsePath.length === 0 || (clickedNode && clickedNode.level === 0)) {
+                    browsePath = [nodeId];
+                } else if (isEdgeFromPrev) {
+                    browsePath.push(nodeId);
+                } else if (browsePath.includes(nodeId)) {
+                    const idx = browsePath.indexOf(nodeId);
+                    browsePath = browsePath.slice(0, idx + 1);
+                } else {
+                    browsePath = [nodeId];
+                }
+                if (browsePath.length >= 2) {
+                    let base = edgeIndex[`${browsePath[0]}-${browsePath[1]}`] || new Set();
+                    browseRows = new Set(base);
+                    for (let i = 1; i < browsePath.length - 1; i++) {
+                        const erows = edgeIndex[`${browsePath[i]}-${browsePath[i+1]}`] || new Set();
+                        const next = new Set();
+                        for (const r of browseRows) { if (erows.has(r)) next.add(r); }
+                        browseRows = next;
+                    }
+                } else {
+                    browseRows = new Set(nodeRowsIndex[browsePath[0]] || []);
+                }
+                const outEdges = allEdges.filter(e => e.from === nodeId);
+                const childrenFiltered = new Set();
+                outEdges.forEach(e => {
+                    const rowsSet = edgeIndex[`${e.from}-${e.to}`] || new Set();
+                    for (const r of browseRows || []) { if (rowsSet.has(r)) { childrenFiltered.add(e.to); break; } }
+                });
+                if (childrenFiltered.size === 0) {
+                    node.children.forEach(childId => visibleNodes.add(childId));
+                } else {
+                    childrenFiltered.forEach(childId => visibleNodes.add(childId));
+                }
+            }
+            updateNetworkVisibility();
+        }
+        
+        function getAllDescendants(nodeId, visited = new Set()) {
+            if (visited.has(nodeId)) return [];
+            visited.add(nodeId);
+            const node = allNodes.find(n => n.id === nodeId);
+            if (!node) return [];
+            let descendants = [...node.children];
+            node.children.forEach(childId => {
+                descendants = descendants.concat(getAllDescendants(childId, visited));
+            });
+            return descendants;
+        }
+        
+        function getColorForLevel(level) {
+            const colors = ['#3498db', '#2ecc71', '#f39c12', '#e74c3c', '#9b59b6', '#1abc9c'];
+            return colors[level % colors.length];
+        }
+
+        function setTitleText(text) {
+            const el = document.getElementById('chartTitle');
+            if (el) el.innerText = text;
+        }
+        function setTitleAlign(align) {
+            const el = document.getElementById('chartTitle');
+            if (el) el.style.textAlign = align;
+        }
+
+        function setGraphBackgroundColor(color) {
+            const el = document.querySelector('.graph-container');
+            if (el) el.style.background = color;
+        }
+
+        let uniformColorEnabled = false;
+        let uniformColor = '#3498db';
+        function toggleUniformNodeColor(checked) {
+            uniformColorEnabled = checked;
+            const input = document.getElementById('uniformNodeColor');
+            if (input) input.disabled = !checked;
+            applyNodeColors();
+        }
+        function setUniformNodeColor(color) {
+            uniformColor = color;
+            if (uniformColorEnabled) applyNodeColors();
+        }
+        function applyNodeColors() {
+            if (!nodesDS) return;
+            const nodes = nodesDS.get();
+            const updates = nodes.map(n => ({ id: n.id, color: uniformColorEnabled ? uniformColor : getColorForLevel(n.level) }));
+            if (updates.length > 0) nodesDS.update(updates);
+            if (network) network.redraw();
+        }
+
+        let edgeColor = '#848484';
+        function setEdgeColor(color) {
+            edgeColor = color;
+            applyEdgeColor();
+        }
+        function applyEdgeColor() {
+            if (!edgesDS) return;
+            const edges = edgesDS.get();
+            const updates = edges.map(e => ({ id: e.id, color: { color: edgeColor, highlight: edgeColor, hover: edgeColor, inherit: false, opacity: 0.5 } }));
+            if (updates.length > 0) edgesDS.update(updates);
+            if (network) network.redraw();
+        }
+
+        let focusModeEnabled = false;
+        let prevVisibleNodes = null;
+        let prevExpandedNodes = null;
+        let focusPath = [];
+        let focusChildrenVisible = false;
+        function toggleFocusMode(checked) {
+            focusModeEnabled = checked;
+            if (checked) {
+                prevVisibleNodes = new Set(visibleNodes);
+                prevExpandedNodes = new Set(expandedNodes);
+                focusPath = [];
+                focusChildrenVisible = false;
+            } else {
+                if (prevVisibleNodes) visibleNodes = new Set(prevVisibleNodes);
+                if (prevExpandedNodes) expandedNodes = new Set(prevExpandedNodes);
+                prevVisibleNodes = null;
+                prevExpandedNodes = null;
+                focusPath = [];
+                focusChildrenVisible = false;
+                updateNetworkVisibility();
+            }
+        }
+        async function checkStartupFile() {
+            try {
+                const startupFile = await eel.get_startup_file()();
+                if (startupFile) {
+                    console.log("Startup file detected:", startupFile);
+                    document.getElementById('filePath').value = startupFile;
+                    
+                    // Auto-detect type
+                    const ext = startupFile.split('.').pop().toLowerCase();
+                    let type = 'csv';
+                    if (['parquet', 'pq'].includes(ext)) type = 'parquet';
+                    else if (['xlsx', 'xls'].includes(ext)) type = 'excel';
+                    
+                    document.getElementById('fileType').value = type;
+                    await loadFile();
+                }
+            } catch (e) {
+                console.error("Error checking startup file:", e);
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', checkStartupFile);
+    </script>
+</body>
+</html>
