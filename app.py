@@ -40,6 +40,14 @@ try:
 except ImportError:
     EEL_AVAILABLE = False
     print("Eel not available. Install with: pip install eel")
+
+try:
+    import plotly
+    import plotly.express as px
+    import plotly.graph_objects as go
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    PLOTLY_AVAILABLE = False
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
     QPushButton, QTextEdit, QTableWidget, QTableWidgetItem, QComboBox,
@@ -3680,7 +3688,7 @@ class DuckDBSQLApp(QMainWindow):
             QMessageBox.critical(self, 'Error', f'Failed to open Nodes Dashboard:\n{str(e)}')
 
     def open_main_dashboard(self, tab_index):
-        """Open the Main Dashboard (dash.py) with the current query results"""
+        """Open the Main Dashboard (dashboard.py) with the current query results"""
         if tab_index not in self.query_tabs:
             return
             
@@ -3710,8 +3718,8 @@ class DuckDBSQLApp(QMainWindow):
             export_query = f"COPY ({clean_query}) TO '{duckdb_path}' (FORMAT PARQUET)"
             self.connection.execute(export_query)
             
-            # Launch dash.py
-            main_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dash.py')
+            # Launch dashboard.py
+            main_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dashboard.py')
             
             # Run in a separate process
             subprocess.Popen([sys.executable, main_path, temp_path])
@@ -5040,10 +5048,10 @@ class DuckDBSQLApp(QMainWindow):
         
         menu.addSeparator()
         
-        # Graph Data
-        graph_action = menu.addAction('Graph Data')
-        graph_action.setEnabled(result_table.rowCount() > 0 and PLOTLY_AVAILABLE)
-        graph_action.triggered.connect(lambda: self.graph_multi_query_data(tab_state))
+        # Build Dashboard
+        dashboard_action = menu.addAction('Build Dashboard')
+        dashboard_action.setEnabled(result_table.rowCount() > 0 and PANDAS_AVAILABLE)
+        dashboard_action.triggered.connect(lambda: self.open_multi_query_dashboard(tab_state))
         
         # Show menu at cursor position
         menu.exec_(result_table.viewport().mapToGlobal(pos))
@@ -5169,6 +5177,46 @@ class DuckDBSQLApp(QMainWindow):
             
         except Exception as e:
             QMessageBox.critical(self, 'Error', f'Failed to create dashboard: {str(e)}')
+
+    def open_multi_query_dashboard(self, tab_state):
+        """Open the Main Dashboard (dashboard.py) with the multi-query results"""
+        if not PANDAS_AVAILABLE:
+            QMessageBox.warning(self, 'Feature Unavailable', 
+                              'Pandas is required. Please install:\n'
+                              'pip install pandas')
+            return
+            
+        try:
+            result_table = tab_state['result_table']
+            
+            # Convert table data to pandas DataFrame
+            df = self.table_to_dataframe(result_table)
+            
+            if df.empty:
+                QMessageBox.information(self, 'No Data', 'No data available for dashboard.')
+                return
+            
+            # Create temp file path
+            import tempfile
+            import subprocess
+            
+            # Create a temporary file name (we close the file descriptor because DuckDB/Pandas will open it)
+            fd, temp_path = tempfile.mkstemp(suffix='.parquet')
+            os.close(fd)
+            
+            # Export DataFrame to Parquet
+            df.to_parquet(temp_path)
+            
+            # Launch dashboard.py
+            main_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dashboard.py')
+            
+            # Run in a separate process
+            subprocess.Popen([sys.executable, main_path, temp_path])
+            
+            self.status_label.setText(f'Opened Dashboard')
+            
+        except Exception as e:
+            QMessageBox.critical(self, 'Error', f'Failed to open Dashboard:\n{str(e)}')
     
     def execute_streaming_query(self, tab_index):
         """Execute a streaming query for the specified tab"""
